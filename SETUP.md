@@ -9,11 +9,29 @@
 
 ```
 ステップ1-2:  GitHub にリポジトリを2つ作成（Esslens, company）
-ステップ3-4:  ローカルに Esslens をクローン、company を submodule として追加
+ステップ3:    ローカルに Esslens をセットアップ（flake.nix・.envrc・.gitignore）
+ステップ4:    company を Esslens 内にクローン
 ステップ5:    このプロジェクトのファイルを company/ にコピー
 ステップ6-8:  Discord Bot の作成・チャンネル作成・.env の設定
-ステップ9-10: 必要なツールの確認
+ステップ9:    Nix と direnv の確認
+ステップ10:   Claude Code の確認
 ステップ11:   Claude Code を起動して作業を渡す
+```
+
+---
+
+## 最終的なディレクトリ構成
+
+```
+Esslens/                  ← VSCodeで開く・git管理・claude起動・nixで環境管理
+├── flake.nix             ← 開発環境の設計図（python, gh, git, nodejs等）
+├── flake.lock            ← バージョン固定
+├── .envrc                ← cd Esslens/ で自動的に nix develop が走る
+├── .gitignore            ← company/ workspace/ .direnv/ を除外
+├── company/              ← 独立したgitリポジトリ（Esslensの環境をそのまま使う）
+└── workspace/            ← git管理外（エージェントが成果物を作る場所）
+    ├── todo-app/         ← 独立リポジトリ（専用の flake.nix を持つ）
+    └── chat-app/         ← 独立リポジトリ（専用の flake.nix を持つ）
 ```
 
 ---
@@ -40,48 +58,70 @@
 
 ## ステップ3：ローカルに Esslens をセットアップする
 
-ターミナルを開いて実行：
-
 ```bash
 # Esslens をクローン
 git clone https://github.com/あなたのユーザー名/Esslens.git
 cd Esslens
 
-# .gitignore を作成（workspace/ を除外する）
-echo "workspace/" > .gitignore
+# .gitignore を作成（company/ workspace/ .direnv/ を除外）
+cat > .gitignore << 'EOF'
+company/
+workspace/
+.direnv/
+EOF
 
 # workspace ディレクトリを作成
 mkdir workspace
 
+# direnv 用の .envrc を作成（これだけで cd 時に自動で nix develop が走る）
+echo "use flake" > .envrc
+
+# flake.nix を作成（仮想会社システムを動かすための環境）
+cat > flake.nix << 'EOF'
+{
+  description = "Esslens development environment";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+  };
+
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let pkgs = nixpkgs.legacyPackages.${system}; in {
+        devShells.default = pkgs.mkShell {
+          packages = [
+            pkgs.python312
+            pkgs.python312Packages.pip
+            pkgs.gh
+            pkgs.git
+            pkgs.nodejs_20
+          ];
+        };
+      });
+}
+EOF
+
+# flake.lock を生成
+nix flake lock
+
 # コミット
-git add .gitignore
-git commit -m "initial: add .gitignore"
+git add .
+git commit -m "initial: Nix environment setup"
 git push origin main
 ```
 
 ---
 
-## ステップ4：company を submodule として追加する
-
-Esslens ディレクトリ内で実行：
+## ステップ4：company を Esslens 内にクローンする
 
 ```bash
-git submodule add https://github.com/あなたのユーザー名/company.git company
-
-git add .gitmodules company
-git commit -m "add company as submodule"
-git push origin main
+# Esslens/ 内で実行
+git clone https://github.com/あなたのユーザー名/company.git company
 ```
 
-完了後の構造：
-
-```
-Esslens/
-├── .gitignore      ← workspace/ を除外
-├── .gitmodules     ← submodule 登録情報（自動生成）
-├── company/        ← company リポジトリの中身
-└── workspace/      ← Git管理外（エージェントの作業場所）
-```
+これだけです。company/ は .gitignore で除外されているため、
+Esslens のコミット管理には影響しません。
 
 ---
 
@@ -107,19 +147,13 @@ company/
     └── human_gate.py
 ```
 
-コピー後、コミットする：
+コピー後、company/ リポジトリにコミットする：
 
 ```bash
 cd Esslens/company
 
 git add .
 git commit -m "initial: add personas and orchestrator skeleton"
-git push origin main
-
-# Esslens 側も submodule の参照を更新
-cd ..
-git add company
-git commit -m "update company submodule"
 git push origin main
 ```
 
@@ -179,46 +213,63 @@ cd Esslens/company
 DISCORD_BOT_TOKEN=ステップ6-2でメモしたトークン
 ```
 
-`.env` を `.gitignore` に追加してコミット：
+`.env` を company の `.gitignore` に追加してコミット：
 
 ```bash
-echo ".env" >> .gitignore
+echo ".env" > .gitignore
 git add .gitignore
-git commit -m "add .env to gitignore"
+git commit -m "add .gitignore"
 git push origin main
 ```
 
 ---
 
-## ステップ9：必要なツールを確認する
+## ステップ9：Nix と direnv を確認する
 
 ```bash
-# Python 3.10 以上であること
-python3 --version
-
-# GitHub CLI（エージェントがリポジトリ作成に使う）
-gh --version
-
-# GitHub CLI にログインしているか確認
-gh auth status
+# Nix が入っているか確認
+nix --version
 ```
 
-**インストールされていない場合：**
+**Nix がインストールされていない場合：**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
+# インストール後ターミナルを再起動
+```
+
+```bash
+# direnv が入っているか確認
+direnv --version
+```
+
+**direnv がインストールされていない場合：**
 
 ```bash
 # Mac
-brew install gh
+brew install direnv
 
-# Windows
-winget install GitHub.cli
+# direnv をシェルに追加（fish の場合）
+echo 'direnv hook fish | source' >> ~/.config/fish/config.fish
 
-# ログイン
-gh auth login
+# zsh の場合
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
 ```
+
+ターミナルを再起動後、Esslens/ に移動して direnv を許可：
+
+```bash
+cd Esslens
+direnv allow
+```
+
+これで `cd Esslens/` するたびに自動で Nix 環境に入るようになります。
 
 ---
 
 ## ステップ10：Claude Code を確認する
+
+Nix 環境に入った状態（`cd Esslens/` 後）で確認：
 
 ```bash
 claude --version
@@ -229,19 +280,19 @@ claude --version
 npm install -g @anthropic-ai/claude-code
 ```
 
-Teamプランのアカウントでログイン済みか確認：
+Team プランのアカウントでログイン済みか確認：
 ```bash
-claude  # 起動して /login でTeamプランのアカウントでログイン
+claude  # 起動して /login で Team プランのアカウントでログイン
 ```
 
 ---
 
 ## ステップ11：Claude Code を起動して作業を渡す
 
-**必ず `Esslens/company/` で起動すること。**
+**必ず `Esslens/` で起動すること（Nix 環境が有効な状態で）。**
 
 ```bash
-cd Esslens/company
+cd Esslens
 claude
 ```
 
@@ -250,22 +301,29 @@ claude
 ---
 
 ```
-HANDOVER.md を読んで、virtual-company プロジェクトの実装を開始してください。
+company/HANDOVER.md を読んで、virtual-company プロジェクトの実装を開始してください。
 
-【プロジェクト構成の補足】
-- このディレクトリ（company/）は Esslens/ の submodule です
-- workspace は Esslens/workspace/ にあります（company/ からの相対パスは ../workspace/）
-- workspace/ は Esslens の .gitignore で除外済みです
-- エージェントが作成する各プロジェクトは workspace/ 以下に gh repo create で作成します
+【プロジェクト構成】
+- 作業ディレクトリは Esslens/（ここで claude を起動している）
+- 仮想会社のシステムコードは company/ にある
+- エージェントが作成するプロジェクトは workspace/ 以下に置く
+- workspace/ 以下の各プロジェクトは gh repo create で独立リポジトリとして作成する
+
+【環境方針（必ず守ること）】
+- 開発環境：Esslens/ の flake.nix で管理済み（python, gh, git, nodejs が使える）
+- company/ には flake.nix を作らない（Esslens の環境をそのまま使う）
+- company/ には Dockerfile と docker-compose.yml を作成する（本番用）
+- workspace/ 以下の各プロジェクトには専用の flake.nix を作成する（技術スタックが異なるため）
 
 【実装の優先順位】
-1. orchestrator/main.py の骨格（Discord接続 + CEOへの転送のみ）
-2. orchestrator/memory.py
-3. requirements.txt、.env.example、Makefile
-4. CEO だけで動作確認できる最小構成を完成させる
+1. company/orchestrator/main.py の骨格（Discord接続 + CEOへの転送のみ）
+2. company/orchestrator/memory.py
+3. company/requirements.txt・.env.example・Makefile
+4. company/Dockerfile・docker-compose.yml
+5. CEO だけで動作確認できる最小構成を完成させる
 
 【完了条件】
-company/ ディレクトリで make install && make start を実行すると
+cd Esslens/company && make install && make start を実行すると
 Discord Bot が起動し、#general へのメッセージに CEO が返答する状態にしてください。
 ```
 
@@ -274,6 +332,7 @@ Discord Bot が起動し、#general へのメッセージに CEO が返答する
 ## 完了後の動作確認
 
 ```bash
+cd Esslens/company
 make install
 make start
 ```

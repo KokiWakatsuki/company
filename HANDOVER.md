@@ -31,7 +31,82 @@ Discordを観測窓として、複数のAIエージェント（CEO・CTO・Progr
 
 ---
 
+## 環境方針
+
+| 環境 | ツール | 用途 |
+|---|---|---|
+| 開発環境 | Nix Flakes + direnv | Esslens/ で管理・cd で自動起動 |
+| 本番環境 | Docker（docker compose） | デプロイ・本番稼働 |
+
+### 重要：Nix の管理単位
+
+```
+Esslens/              ← flake.nix はここだけ（会社システム全体の環境）
+├── flake.nix         ← python, gh, git, nodejs 等をすべてここで管理
+├── flake.lock
+├── .envrc            ← "use flake" の1行だけ。cd で自動的に nix develop が走る
+├── .gitignore        ← company/ workspace/ .direnv/ を除外
+├── company/          ← flake.nix 不要。Esslens の環境をそのまま使う
+└── workspace/
+    ├── todo-app/     ← プロジェクト固有の flake.nix を持つ（技術スタックが異なるため）
+    └── chat-app/     ← 同上
+```
+
+**company/ に flake.nix は作らない。** Esslens の環境（python, gh 等）をそのまま使う。
+
+**workspace/ 以下の各プロジェクトは自前の flake.nix を持つ。** Programmer エージェントが
+プロジェクトの技術スタック（Next.js, Rust, etc.）に合わせて作成する。
+
+### Esslens/flake.nix に含めるパッケージ
+
+```nix
+{
+  description = "Esslens development environment";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+  };
+
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachDefaultSystem (system:
+      let pkgs = nixpkgs.legacyPackages.${system}; in {
+        devShells.default = pkgs.mkShell {
+          packages = [
+            pkgs.python312
+            pkgs.python312Packages.pip
+            pkgs.gh        # GitHub CLI（エージェントがリポジトリ作成に使う）
+            pkgs.git
+            pkgs.nodejs_20 # Claude Agent SDK（Node.js製）
+          ];
+        };
+      });
+}
+```
+
+### Esslens/.envrc
+
+```bash
+use flake
+```
+
+これだけ。`cd Esslens/` した瞬間に自動で `nix develop` 相当の環境に入る。
+
+### company/ の Dockerfile（本番用）
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["python", "orchestrator/main.py"]
+```
+
+---
+
 ## システム構成
+
 
 ```
 ユーザー（Discord #general に投稿）
@@ -58,7 +133,7 @@ GitHubアカウント上の構成：
 ```
 github.com/あなた/
 ├── Esslens        ← 親リポジトリ（Claude Codeはここで起動）
-├── company        ← submoduleとして登録（仮想会社システム本体）
+├── company        ← 独立したリポジトリ（仮想会社システム本体）
 ├── todo-app       ← エージェントが自動作成（例）
 └── chat-app       ← エージェントが自動作成（例）
 ```
@@ -66,10 +141,9 @@ github.com/あなた/
 ローカルのディレクトリ構成：
 
 ```
-Esslens/                        ← git管理（親リポジトリ）
-├── .gitmodules                 ← submodule登録ファイル（自動生成）
-├── .gitignore                  ← workspace/ を除外済み
-├── company/                    ← submodule（このディレクトリ）
+Esslens/                        ← git管理（.gitignore で company/ と workspace/ を除外）
+├── .gitignore                  ← company/ と workspace/ を除外済み
+├── company/                    ← 独立したgitリポジトリ（このディレクトリ）
 │   ├── HANDOVER.md             ← このファイル
 │   ├── Makefile                ← 未作成
 │   ├── .env                    ← 未作成（DISCORD_BOT_TOKEN のみ必要）
